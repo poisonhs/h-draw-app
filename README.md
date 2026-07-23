@@ -1,11 +1,10 @@
 # H-DRAW App (uni-app 版)
 
-> 基于 uni-app 的 AI 生图 App，同时支持 Android + iOS + 小程序
+> 基于 uni-app 的 AI 生图 App，同时支持 Android + iOS
 
 ## 使用方式
 
 ### 1. 安装 HBuilderX
-下载 [HBuilderX](https://www.dcloud.io/hbuilderx.html) 并安装
 
 ### 2. 导入项目
 - 打开 HBuilderX
@@ -20,7 +19,6 @@
 | Android App | 运行 → 运行到手机或模拟器 |
 | 打包 APK | 发行 → 原生App-云打包 → 打包Android |
 | 打包 IPA | 发行 → 原生App-云打包 → 打包iOS |
-| 微信小程序 | 发行 → 小程序-微信 |
 
 ## 项目结构
 
