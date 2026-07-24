@@ -2,8 +2,8 @@
     "name" : "H-DRAW",
     "appid" : "__UNI__40E9FAA",
     "description" : "AI 图片生成",
-    "versionName" : "1.0.8",
-    "versionCode" : 108,
+    "versionName" : "1.0.9",
+    "versionCode" : 109,
     "transformPx" : false,
     "app-plus" : {
         "usingComponents" : false,
