@@ -1,69 +1,119 @@
-name: 发布新版
+name: 编译未签名 IPA
 
 on:
   push:
     tags:
-      - 'v*'   # 推送 v1.0.7 类似的标签时触发
+      - 'v*'
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build-ipa:
+    runs-on: macos-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 从标签提取版本号
+      - name: 解析版本号
         id: version
         run: |
-          TAG=${GITHUB_REF_NAME#v}          # v1.0.7 → 1.0.7
+          TAG=${GITHUB_REF_NAME#v}
           echo "version_name=$TAG" >> $GITHUB_OUTPUT
           CODE=$(echo "$TAG" | awk -F. '{print $1*10000 + $2*100 + $3}')
           echo "version_code=$CODE" >> $GITHUB_OUTPUT
 
-      - name: 生成 version.json
+      - name: 编译未签名 .app（ObjC + WKWebView）
+        run: |
+          APP="build/ios"
+          NAME="H-DRAW"
+          OUTPUT="build/$NAME.app"
+          mkdir -p "$OUTPUT"
+
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+
+          # 编译主二进制
+          clang -isysroot "$SDK" \
+            -target arm64-apple-ios15.0 \
+            -fobjc-arc \
+            -fmodules \
+            -framework UIKit \
+            -framework WebKit \
+            -framework Foundation \
+            -o "$OUTPUT/$NAME" \
+            "$APP/main.m"
+
+          # 复制 Info.plist
+          cp "$APP/Info.plist" "$OUTPUT/"
+          plutil -replace CFBundleShortVersionString \
+            -string "${{ steps.version.outputs.version_name }}" "$OUTPUT/Info.plist"
+          plutil -replace CFBundleVersion \
+            -string "${{ steps.version.outputs.version_code }}" "$OUTPUT/Info.plist"
+          plutil -replace CFBundleDisplayName -string "H-DRAW" "$OUTPUT/Info.plist"
+
+          # 简化未签名包：移除签名要求（AltStore 会重新签名）
+          echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+          \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\
+          <plist version=\"1.0\"><dict>\
+          <key>keychain-access-groups</key><array/>\
+          <key>get-task-allow</key><true/>\
+          <key>application-identifier</key><string>com.hdraw.app</string>\
+          <key>com.apple.developer.team-identifier</key><string></string>\
+          </dict></plist>" > build/entitlements.plist
+
+          # 用 ldid 加轻量签名（若无 ldid 则用 codesign 兜底）
+          if command -v ldid &> /dev/null; then
+            ldid -Sbuild/entitlements.plist "$OUTPUT/$NAME"
+          else
+            codesign --force --deep -s - "$OUTPUT" 2>/dev/null || true
+          fi
+
+      - name: 生成未签名 IPA
+        run: |
+          mkdir -p build/Payload
+          cp -r build/H-DRAW.app build/Payload/
+          cd build
+          zip -r H-DRAW.ipa Payload/
+          rm -rf Payload
+          echo "=== IPA 大小 ==="
+          ls -lh H-DRAW.ipa
+
+      - name: 更新 version.json
         run: |
           cat > version.json << EOF
           {
             "versionCode": ${{ steps.version.outputs.version_code }},
             "versionName": "${{ steps.version.outputs.version_name }}",
-            "url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/h-draw-app.apk",
-            "note": "${{ github.event.head_commit.message || '新版本发布' }}"
+            "url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/H-DRAW.ipa",
+            "note": "新版本发布"
           }
           EOF
-          echo "==== 生成的 version.json ===="
-          cat version.json
 
       - name: 提交 version.json
         run: |
           git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.email "actions@github.com"
           git add version.json
-          git commit -m "chore: 更新 version.json 至 ${{ steps.version.outputs.version_name }}" || echo "无变更"
+          git commit -m "chore: version ${{ steps.version.outputs.version_name }}" && git push || true
 
-      - name: 推送 version.json
-        run: git push
-
-      - name: 创建 Release
-        uses: softprops/action-gh-release@v2
+      - name: 创建 Release 并上传 IPA
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: H-DRAW ${{ steps.version.outputs.version_name }}
           body: |
-            ## H-DRAW ${{ steps.version.outputs.version_name }} 发布
+            ## H-DRAW ${{ steps.version.outputs.version_name }}
 
-            ### 更新内容
-            ${{ github.event.head_commit.message || '请查看提交记录了解变更' }}
+            ### iOS 安装说明
+            此 IPA **未经苹果签名**，需用侧载工具安装到 iPhone：
 
-            ### 安装
-            1. 下载 `h-draw-app.apk`（发布版已内置最新 version.json）
-            2. 安装到 Android 设备
-            3. 或下载 WGT 热更新包替换 `/unpackage/release/`
+            | 工具 | 平台 | 使用方法 |
+            |------|------|----------|
+            | [AltStore](https://altstore.io) | macOS | 电脑安装 AltServer → 数据线连接 iPhone → 拖入 IPA |
+            | [SideStore](https://sidestore.io) | macOS | 同上，支持无线 |
+            | [Sideloadly](https://sideloadly.io) | Win/Mac | 免费，直接拖入 IPA 自动签名安装 |
+            | [TrollStore](https://trollstore.app) | iOS | 支持 iOS 14-17，直接安装未签名 IPA |
 
             ### 服务器更新
-            将本 Release 的 `version.json` 上传到服务器：
             ```bash
-            curl -L -o /var/www/app.hdraw.de/version.json \
+            curl -L -o /var/www/app.hdraw.de/version.json \\
               https://raw.githubusercontent.com/${{ github.repository }}/main/version.json
             ```
-          draft: false
-          prerelease: false
+          files: build/H-DRAW.ipa
