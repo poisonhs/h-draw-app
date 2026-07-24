@@ -1,6 +1,6 @@
 {
-  "versionCode": 106,
-  "versionName": "1.0.6",
-  "url": "https://app.hdraw.de/h-draw-app.apk",
-  "note": "优化UI样式\n新增尺寸快捷选择\n修复历史预览显示问题"
+  "versionCode": 108,
+  "versionName": "1.0.8",
+  "url": "https://github.com/poisonhs/h-draw-app/releases/download/v1.0.8/H-DRAW.ipa",
+  "note": "支持 GitHub Actions 编译未签名 IPA\n版本更新检查"
 }
