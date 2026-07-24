@@ -1,8 +1,18 @@
 # HBuilderX / uni-app generated files
 unpackage/cache/
-unpackage/dist/
+unpackage/dist/dev/
+unpackage/dist/build/.automator/
 unpackage/release/
 unpackage/resources/
+
+# Keep release app-plus + icons for unsigned iOS offline packaging
+# tracked: unpackage/dist/build/app-plus, unpackage/res/icons
+
+# Offline SDK / local iOS build outputs (repo root only)
+/ios-shell/
+/build/
+/Payload/
+*.ipa
 
 # IDE and OS files
 .hbuilderx/
