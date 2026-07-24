@@ -1,0 +1,119 @@
+name: Build unsigned iOS IPA
+
+permissions:
+  contents: write
+
+"on":
+  workflow_dispatch:
+    inputs:
+      ios_shell_url:
+        description: 'DCloud iOS offline SDK zip URL (optional when IOS_SHELL_URL variable exists)'
+        required: false
+        type: string
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download DCloud iOS shell
+        env:
+          IOS_SHELL_URL: ${{ inputs.ios_shell_url || vars.IOS_SHELL_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ios-shell
+          if [ -n "$IOS_SHELL_URL" ]; then
+            curl --fail --location --retry 3 "$IOS_SHELL_URL" -o /tmp/ios-shell.zip
+          else
+            gh release download ios-sdk-5.15 \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern 'dcloud-ios-sdk-5.15.zip' \
+              --dir /tmp
+            mv /tmp/dcloud-ios-sdk-5.15.zip /tmp/ios-shell.zip
+          fi
+          unzip -q /tmp/ios-shell.zip -d ios-shell
+
+      - name: Inject app-plus resources
+        run: bash scripts/prepare-ios-shell.sh
+
+      - name: Build unsigned .app
+        run: |
+          XCODE_APP=$(python3 - <<'PY'
+          import glob, re
+          apps = glob.glob('/Applications/Xcode*.app')
+          def version(path):
+              match = re.search(r'Xcode[_-]([0-9.]+)\.app$', path)
+              return tuple(map(int, match.group(1).split('.'))) if match else (0,)
+          print(max(apps, key=version))
+          PY
+          )
+          sudo xcode-select --switch "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+
+          PROJECT=$(find ios-shell -path '*/__MACOSX/*' -prune -o -name 'HBuilder-Hello.xcodeproj' -print -quit)
+          test -n "$PROJECT" || { echo 'HBuilder-Hello.xcodeproj was not found in the shell zip.' >&2; exit 1; }
+          sed -i '' "s#/Applications/Xcode.app#$XCODE_APP#g" "$PROJECT/project.pbxproj"
+          PROJECT_DIR=$(dirname "$PROJECT")
+          python3 scripts/generate-ios-icons.py unpackage/res/icons/1024x1024.png "$PROJECT_DIR"
+          python3 scripts/blank-ios-launch-screen.py "$PROJECT_DIR"
+          BUILD_ARGS=(-project "$PROJECT")
+          if [ -f "$PROJECT_DIR/Podfile" ]; then
+            (cd "$PROJECT_DIR" && pod install --repo-update)
+            WORKSPACE=$(find "$PROJECT_DIR" -maxdepth 1 -name '*.xcworkspace' -print -quit)
+            if [ -n "$WORKSPACE" ]; then
+              BUILD_ARGS=(-workspace "$WORKSPACE")
+            fi
+          fi
+
+          # Set the native app label. The runtime splash is disabled in prepare-ios-shell.sh;
+          # iOS may still show its required blank system launch transition.
+          while IFS= read -r -d '' PLIST; do
+            if /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$PLIST" 2>/dev/null | grep -q .; then
+              /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName H-DRAW" "$PLIST" 2>/dev/null || true
+              /usr/libexec/PlistBuddy -c "Set :CFBundleName H-DRAW" "$PLIST" 2>/dev/null || true
+            fi
+          done < <(find "$PROJECT_DIR" -maxdepth 2 -name '*.plist' -print0)
+          while IFS= read -r -d '' STRINGS; do
+            sed -i '' -E 's/CFBundleDisplayName[[:space:]]*=[[:space:]]*"[^"]*";/CFBundleDisplayName="H-DRAW";/' "$STRINGS"
+          done < <(find "$PROJECT_DIR" -path '*/InfoPlist.strings' -print0)
+
+          xcodebuild "${BUILD_ARGS[@]}" -list
+          SCHEME=$(xcodebuild "${BUILD_ARGS[@]}" -list -json | python3 -c 'import json, sys; d=json.load(sys.stdin); k="workspace" if "workspace" in d else "project"; print(d[k]["schemes"][0])')
+          test -n "$SCHEME" || { echo 'No shared Xcode scheme was found.' >&2; exit 1; }
+          echo "Using scheme: $SCHEME"
+          mkdir -p build/App
+          xcodebuild \
+            "${BUILD_ARGS[@]}" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            CONFIGURATION_BUILD_DIR="$PWD/build/App" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            SWIFT_ENABLE_EXPLICIT_MODULES=NO \
+            build
+
+      - name: Package IPA
+        run: |
+          APP=$(find build/App -maxdepth 1 -type d -name '*.app' -print -quit)
+          test -n "$APP" || { echo 'The Xcode build did not produce an .app.' >&2; exit 1; }
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry H-DRAW-unsigned.ipa Payload
+
+      - name: Upload IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload ios-sdk-5.15 H-DRAW-unsigned.ipa \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+      - name: Upload IPA artifact (optional)
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: H-DRAW-unsigned-ipa
+          path: H-DRAW-unsigned.ipa
