@@ -1,0 +1,69 @@
+name: 发布新版
+
+on:
+  push:
+    tags:
+      - 'v*'   # 推送 v1.0.7 类似的标签时触发
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 从标签提取版本号
+        id: version
+        run: |
+          TAG=${GITHUB_REF_NAME#v}          # v1.0.7 → 1.0.7
+          echo "version_name=$TAG" >> $GITHUB_OUTPUT
+          CODE=$(echo "$TAG" | awk -F. '{print $1*10000 + $2*100 + $3}')
+          echo "version_code=$CODE" >> $GITHUB_OUTPUT
+
+      - name: 生成 version.json
+        run: |
+          cat > version.json << EOF
+          {
+            "versionCode": ${{ steps.version.outputs.version_code }},
+            "versionName": "${{ steps.version.outputs.version_name }}",
+            "url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/h-draw-app.apk",
+            "note": "${{ github.event.head_commit.message || '新版本发布' }}"
+          }
+          EOF
+          echo "==== 生成的 version.json ===="
+          cat version.json
+
+      - name: 提交 version.json
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add version.json
+          git commit -m "chore: 更新 version.json 至 ${{ steps.version.outputs.version_name }}" || echo "无变更"
+
+      - name: 推送 version.json
+        run: git push
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: H-DRAW ${{ steps.version.outputs.version_name }}
+          body: |
+            ## H-DRAW ${{ steps.version.outputs.version_name }} 发布
+
+            ### 更新内容
+            ${{ github.event.head_commit.message || '请查看提交记录了解变更' }}
+
+            ### 安装
+            1. 下载 `h-draw-app.apk`（发布版已内置最新 version.json）
+            2. 安装到 Android 设备
+            3. 或下载 WGT 热更新包替换 `/unpackage/release/`
+
+            ### 服务器更新
+            将本 Release 的 `version.json` 上传到服务器：
+            ```bash
+            curl -L -o /var/www/app.hdraw.de/version.json \
+              https://raw.githubusercontent.com/${{ github.repository }}/main/version.json
+            ```
+          draft: false
+          prerelease: false
