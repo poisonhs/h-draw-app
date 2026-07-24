@@ -1,4 +1,4 @@
-name: 编译未签名 IPA
+name: 发布版本
 
 on:
   push:
@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build-ipa:
-    runs-on: macos-latest
+  release:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -19,68 +19,9 @@ jobs:
         run: |
           TAG=${GITHUB_REF_NAME#v}
           echo "version_name=$TAG" >> $GITHUB_OUTPUT
-          # 1.0.9 → 109
+          # 1.0.9 → 109（与 manifest.versionCode 规则一致）
           CODE=$(echo "$TAG" | awk -F. '{print $1*100 + $2*10 + $3}')
           echo "version_code=$CODE" >> $GITHUB_OUTPUT
-
-      - name: 编译未签名 .app（ObjC + WKWebView）
-        run: |
-          set -e
-          APP="build/ios"
-          NAME="H-DRAW"
-          OUTPUT="build/$NAME.app"
-          rm -rf "$OUTPUT"
-          mkdir -p "$OUTPUT"
-
-          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
-          echo "SDK=$SDK"
-
-          clang -isysroot "$SDK" \
-            -target arm64-apple-ios15.0 \
-            -arch arm64 \
-            -fobjc-arc \
-            -fmodules \
-            -miphoneos-version-min=15.0 \
-            -framework UIKit \
-            -framework WebKit \
-            -framework Foundation \
-            -o "$OUTPUT/$NAME" \
-            "$APP/main.m"
-
-          # 可执行名必须与 CFBundleExecutable 一致
-          file "$OUTPUT/$NAME"
-          ls -lh "$OUTPUT/$NAME"
-          chmod +x "$OUTPUT/$NAME"
-
-          cp "$APP/Info.plist" "$OUTPUT/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $NAME" "$OUTPUT/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName $NAME" "$OUTPUT/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $NAME" "$OUTPUT/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.version_name }}" "$OUTPUT/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ steps.version.outputs.version_code }}" "$OUTPUT/Info.plist"
-
-          # 校验：可执行文件必须存在且可执行
-          test -x "$OUTPUT/$NAME"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$OUTPUT/Info.plist"
-
-          # ad-hoc 签名
-          codesign --force --deep -s - "$OUTPUT" || true
-          codesign -dv --verbose=2 "$OUTPUT" || true
-          ls -laR "$OUTPUT"
-
-      - name: 生成未签名 IPA
-        run: |
-          set -e
-          rm -rf build/Payload
-          mkdir -p build/Payload
-          cp -a build/H-DRAW.app build/Payload/
-          # 校验 Payload 结构
-          test -f build/Payload/H-DRAW.app/H-DRAW
-          test -f build/Payload/H-DRAW.app/Info.plist
-          (cd build && zip -qry H-DRAW.ipa Payload)
-          rm -rf build/Payload
-          ls -lh build/H-DRAW.ipa
-          unzip -l build/H-DRAW.ipa
 
       - name: 更新 version.json 并推到 main
         run: |
@@ -88,8 +29,8 @@ jobs:
           {
             "versionCode": ${{ steps.version.outputs.version_code }},
             "versionName": "${{ steps.version.outputs.version_name }}",
-            "url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/H-DRAW.ipa",
-            "note": "修复 IPA 主程序名与 bundle 结构"
+            "url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/h-draw-app.apk",
+            "note": "新版本发布"
           }
           EOF
           git config user.name "github-actions"
@@ -100,7 +41,7 @@ jobs:
           git commit -m "chore: version ${{ steps.version.outputs.version_name }}" || true
           git push origin main || true
 
-      - name: 创建 Release 并上传 IPA
+      - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -108,17 +49,28 @@ jobs:
           body: |
             ## H-DRAW ${{ steps.version.outputs.version_name }}
 
-            ### 修复
-            - 修正 CFBundleExecutable 与主二进制同名（解决 Parse Error 303）
-            - 补齐 rootViewController / MinimumOSVersion / ATS
+            ### 下载
+            请将本机 HBuilderX 打包的 **Android APK** 上传到本 Release：
+            - 文件名建议：`h-draw-app.apk`
 
-            ### iOS 安装说明
-            此 IPA **未经苹果签名**，需用侧载工具安装：
+            ### App 内更新
+            用户安装后启动 App，会检查：
+            ```
+            https://app.hdraw.de/version.json
+            ```
+            若 `versionCode` 更大则提示更新。
 
-            | 工具 | 平台 |
-            |------|------|
-            | [AltStore](https://altstore.io) | macOS |
-            | [SideStore](https://sidestore.io) | macOS |
-            | [Sideloadly](https://sideloadly.io) | Win/Mac |
-            | [TrollStore](https://trollstore.app) | iOS 14-17 |
-          files: build/H-DRAW.ipa
+            ### 服务器更新
+            ```bash
+            # 1) 上传 APK（可选）
+            # scp h-draw-app.apk root@服务器:/var/www/app.hdraw.de/
+
+            # 2) 更新 version.json
+            curl -L -o /var/www/app.hdraw.de/version.json \
+              https://raw.githubusercontent.com/${{ github.repository }}/main/version.json
+            ```
+          # 若仓库/工作区里已有 APK，会附带到 Release；没有也不失败
+          files: |
+            h-draw-app.apk
+            unpackage/release/**/*.apk
+          fail_on_unmatched_files: false
